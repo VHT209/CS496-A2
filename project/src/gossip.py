@@ -25,44 +25,30 @@ class GossipProtocol:
     def gossip_loop(self):
         logger.info("Gossip protocol started.")
         while self.running:
-            # TODO: Implement Gossip Loop
-            # See prompt for guidance
-            pass
+            try:
+              self.sync_with_peer(random.choice(self.peers))
+            except Exception as e:
+              logger.warning(f"Error during gossip sync: {e}")
+            #Sleep for a random interval between MIN & MAX
+            sleep_time = random.uniform(GOSSIP_INTERVAL_MIN_SECONDS, GOSSIP_INTERVAL_MAX_SECONDS)
+            logger.debug(f"Sleeping for {sleep_time:.2f} seconds.")
+            time.sleep(sleep_time)
 
     def sync_with_peer(self, peer_url):
-        """
-        Synchronize messages with a peer node.
-        
-        TODO: Implement Sync Logic
-                
-        EDUCATIONAL NOTE - Why Production Systems Use More Sophisticated Approaches:
-        
-        Our simple approach: Pull ALL messages from peer, then merge.
-        Problem: As data grows, transferring everything becomes expensive (O(n) bandwidth).
-        
-        MERKLE TREES (used by Cassandra, Dynamo, Git):
-        - A tree where each leaf is a hash of a data block, and each parent is a hash
-          of its children's hashes.
-        - To sync: Compare root hashes. If equal, data is identical (done!).
-          If different, recursively compare children to find exactly which blocks differ.
-        - Benefit: O(log n) comparisons to find differences, only transfer what's needed.
-        - Example: With 1 million messages, instead of transferring all 1M, we might
-          only need to compare ~20 hashes and transfer the few differing messages.
-        
-        VECTOR CLOCKS (used by Riak, Voldemort):
-        - Each node maintains a vector of logical timestamps: {node1: 5, node2: 3, node3: 7}
-        - When a node writes, it increments its own counter.
-        - To sync: Compare vectors to determine causal ordering.
-        - Benefit: Detects conflicts (concurrent writes) vs sequential updates.
-        - Example: If node1 has {A:2, B:1} and node2 has {A:1, B:2}, there's a conflict
-          (both wrote independently). If node1 has {A:2, B:1} and node2 has {A:1, B:1},
-          node1's version is newer (no conflict).
-        
-        For this assignment, we use a simple "pull all and merge by ID" strategy,
-        which is correct but inefficient at scale.
-        """
-        pass
-
+        data_from_peer = requests.get(url=peer_url + "/messages", timeout=REQUEST_TIMEOUT_SECONDS)
+        if data_from_peer.status_code == HTTP_OK:
+            # return empty list as default if key is missing
+            peer_messages = data_from_peer.json().get("messages", [])
+            # Compare peer messages with local storage and add any new messages to local storage for those with unique ids
+            new_messages = [msg for msg in peer_messages if not any(current_message["id"] == msg["id"] for current_message in self.storage)]
+            if new_messages:
+                logger.info(f"Received {len(new_messages)} new messages from peer {peer_url}.")
+                self.storage.extend(new_messages)
+            else:
+                logger.debug(f"No new messages received from peer {peer_url}.")
+        else:
+            logger.warning(f"Failed to sync with peer {peer_url}. Status code: {data_from_peer.status_code}")
+            
 def start_gossip_thread(node_id, peers, storage):
     gossip = GossipProtocol(node_id, peers, storage)
     gossip.start()

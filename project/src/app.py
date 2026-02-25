@@ -25,8 +25,8 @@ MODE = os.environ.get("MODE", MODE_STRONG)  # STRONG or EVENTUAL
 NODE_ID = get_node_id()
 PEERS = get_peers()
 
-# TODO: Start Gossip if in eventual mode
-# HINT: Check if MODE is MODE_EVENTUAL and call gossip.start_gossip_thread(...)
+if MODE == MODE_EVENTUAL:
+    gossip.start_gossip_thread(NODE_ID, PEERS, MESSAGES) 
 
 @app.route('/')
 def health():
@@ -57,23 +57,49 @@ def post_message():
     }
 
     if MODE == MODE_STRONG:
-        # TODO: Implement Strong Consistency (Quorum) logic
-        # See prompt for guidance
-        pass 
+        try:
+            # Add MESSAGES to commit locally easier
+            success, count = quorum.write_message_quorum(message, PEERS)
+            if success:
+                # Check in case of locally committing twice
+                if not any(previousMessages['id'] == message['id'] for previousMessages in MESSAGES):
+                    MESSAGES.append(message)
+                return jsonify({"status": "committed", 
+                                "mode":   "quorum",
+                                "replicas": count,
+                                "message_id": message['id']}), HTTP_OK
+            else:
+                return jsonify({"error": "quorum failed to reach"}), HTTP_INTERNAL_SERVER_ERROR
+        except Exception as e:
+            logger.exception(e)
+            return jsonify({"error": "quorum mode unknown error"}), HTTP_INTERNAL_SERVER_ERROR
 
     elif MODE == MODE_EVENTUAL:
-        # TODO: Implement Eventual Consistency (Gossip) logic
-        # See prompt for guidance
-        pass
-    
+        try:
+            MESSAGES.append(message)
+            return jsonify({"status": "accepted", 
+                                "mode":   "gossip",
+                                "note": "Propagation in progress",
+                                "message_id": message['id']}), HTTP_ACCEPTED
+        except Exception as e:
+            logger.exception(e)
+            return jsonify({"error": "gossip mode unknown error"}), HTTP_INTERNAL_SERVER_ERROR
     else:
-        return jsonify({"error": "Unknown mode"}), HTTP_INTERNAL_SERVER_ERROR
+        return jsonify({"error": "Unknown mode"})
+
+
 
 @app.route('/internal/write', methods=['POST'])
 def internal_write():
-    # TODO: Implement internal endpoint for peers to accept a write (used in Quorum mode). 
-    # See prompt for guidance
-    pass
+    data = request.json
+    if not data or 'text' not in data:
+        return jsonify({"error": "Invalid payload"}), HTTP_BAD_REQUEST
+    # Check duplicate message ID 
+    elif any(previousMessages['id'] == data['id'] for previousMessages in MESSAGES):
+        return jsonify({"error": "Duplicate message ID"}), HTTP_BAD_REQUEST
+    else:
+        MESSAGES.append(data)
+        return jsonify({"message": "committed"}), HTTP_OK
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', DEFAULT_PORT))
